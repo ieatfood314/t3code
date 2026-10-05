@@ -1,7 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
-import { DesktopSnapShotId } from "@t3tools/contracts";
+import {
+  DEFAULT_CLIENT_SETTINGS,
+  DesktopSnapShotId,
+  type ClientSettings,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -222,6 +226,7 @@ function layerTest(input: {
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
   readonly createdWindowOptions?: Electron.BrowserWindowConstructorOptions[];
   readonly desktopSettings?: DesktopAppSettings.DesktopSettings;
+  readonly clientSettings?: Option.Option<ClientSettings>;
   readonly mainWindowBoundsUpdates?: DesktopAppSettings.DesktopWindowBounds[];
   readonly mainWindowMaximizedUpdates?: boolean[];
   readonly beforeMainWindowBoundsUpdate?: (
@@ -303,9 +308,12 @@ function layerTest(input: {
         }),
         layerDesktopEnvironment,
         layerDesktopAppSettings,
-        layerDesktopClientSettings,
+        Layer.mock(DesktopClientSettings.DesktopClientSettings)({
+          get: input.clientSettingsRef
+            ? Ref.get(input.clientSettingsRef)
+            : Effect.succeed(input.clientSettings ?? Option.none()),
+        }),
         layerDesktopServerExposure,
-        DesktopState.layer,
         layerElectronApp,
         Layer.succeed(ElectronMenu.ElectronMenu, {
           setApplicationMenu: () => Effect.void,
@@ -610,6 +618,67 @@ describe("DesktopWindow", () => {
       DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE,
     );
   });
+
+  it("treats only below-default glass opacity as a transparent window", () => {
+    assert.isTrue(DesktopWindow.shouldUseTransparentMainWindow(40));
+    assert.isTrue(DesktopWindow.shouldUseTransparentMainWindow(75));
+    assert.isFalse(DesktopWindow.shouldUseTransparentMainWindow(80));
+    assert.isFalse(DesktopWindow.shouldUseTransparentMainWindow(100));
+  });
+
+  it.effect("creates a transparent main window when glass opacity is below default", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        createdWindowOptions,
+        desktopSettings: {
+          ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+          localEnvironmentEnabled: false,
+        },
+        clientSettings: Option.some({ ...DEFAULT_CLIENT_SETTINGS, glassOpacity: 40 }),
+      });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.createMainIfBackendReady;
+        assert.equal(yield* Ref.get(createCount), 1);
+        assert.isTrue(createdWindowOptions[0]?.transparent);
+        assert.isUndefined(createdWindowOptions[0]?.backgroundColor);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("keeps an opaque main window at default glass opacity", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        createdWindowOptions,
+        desktopSettings: {
+          ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+          localEnvironmentEnabled: false,
+        },
+        clientSettings: Option.some({ ...DEFAULT_CLIENT_SETTINGS }),
+      });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.createMainIfBackendReady;
+        assert.equal(yield* Ref.get(createCount), 1);
+        assert.isNotTrue(createdWindowOptions[0]?.transparent);
+        assert.equal(createdWindowOptions[0]?.backgroundColor, "#ffffff");
+      }).pipe(Effect.provide(layer));
+    }),
+  );
 
   it("recognizes only same-origin renderer navigations", () => {
     assert.isTrue(
