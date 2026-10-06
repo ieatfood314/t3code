@@ -181,6 +181,49 @@ export function shouldUseTransparentMainWindow(glassOpacity: number): boolean {
   return glassOpacity < DEFAULT_GLASS_OPACITY;
 }
 
+// Known-compositing X11 desktops. Wayland sessions composite by protocol, and
+// macOS/Windows always composite, so this list only guards the one setup that
+// can strand a transparent window on solid black: Linux X11 without compositing.
+const COMPOSITING_X11_DESKTOPS = [
+  "kde",
+  "plasma",
+  "gnome",
+  "cinnamon",
+  "xfce",
+  "hyprland",
+  "sway",
+  "niri",
+  "cosmic",
+  "pantheon",
+  "budgie",
+  "lxqt",
+  "mate",
+  "unity",
+  "deepin",
+] as const;
+
+export function isTransparentWindowSupported(input: {
+  readonly platform: NodeJS.Platform;
+  readonly sessionType: string | undefined;
+  readonly waylandDisplay: string | undefined;
+  readonly currentDesktop: string | undefined;
+}): boolean {
+  if (input.platform === "darwin" || input.platform === "win32") {
+    return true;
+  }
+  if (input.platform !== "linux") {
+    return false;
+  }
+  if (input.sessionType === "wayland") {
+    return true;
+  }
+  if (input.waylandDisplay !== undefined && input.waylandDisplay !== "") {
+    return true;
+  }
+  const desktop = (input.currentDesktop ?? "").toLowerCase();
+  return COMPOSITING_X11_DESKTOPS.some((known) => desktop.includes(known));
+}
+
 type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
 
 function windowFitsWithinDisplay(
@@ -374,13 +417,21 @@ export const make = Effect.gen(function* () {
 
   // Transparency is fixed when the window is created, so this reads the
   // persisted preference instead of live settings. An unreadable or missing
-  // file falls back to the opaque default look.
+  // file falls back to the opaque default look, as does a platform without
+  // compositing (a transparent frame would strand the window on black there).
   const readTransparentMainWindow = clientSettings.get.pipe(
-    Effect.map((persisted) =>
-      shouldUseTransparentMainWindow(
-        Option.getOrElse(persisted, () => DEFAULT_CLIENT_SETTINGS).glassOpacity,
-      ),
-    ),
+    Effect.map((persisted) => {
+      const glassOpacity = Option.getOrElse(persisted, () => DEFAULT_CLIENT_SETTINGS).glassOpacity;
+      return (
+        shouldUseTransparentMainWindow(glassOpacity) &&
+        isTransparentWindowSupported({
+          platform: environment.platform,
+          sessionType: process.env.XDG_SESSION_TYPE,
+          waylandDisplay: process.env.WAYLAND_DISPLAY,
+          currentDesktop: process.env.XDG_CURRENT_DESKTOP,
+        })
+      );
+    }),
     Effect.catch((error) =>
       logWindowWarning("failed to read client settings; using opaque main window", {
         cause: error,

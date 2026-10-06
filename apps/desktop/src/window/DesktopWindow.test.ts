@@ -631,6 +631,65 @@ describe("DesktopWindow", () => {
     assert.isFalse(DesktopWindow.shouldUseTransparentMainWindow(100));
   });
 
+  it("only allows transparent windows where compositing is guaranteed", () => {
+    assert.isTrue(
+      DesktopWindow.isTransparentWindowSupported({
+        platform: "darwin",
+        sessionType: undefined,
+        waylandDisplay: undefined,
+        currentDesktop: undefined,
+      }),
+    );
+    assert.isTrue(
+      DesktopWindow.isTransparentWindowSupported({
+        platform: "win32",
+        sessionType: undefined,
+        waylandDisplay: undefined,
+        currentDesktop: undefined,
+      }),
+    );
+    assert.isTrue(
+      DesktopWindow.isTransparentWindowSupported({
+        platform: "linux",
+        sessionType: "wayland",
+        waylandDisplay: "wayland-0",
+        currentDesktop: "KDE",
+      }),
+    );
+    assert.isTrue(
+      DesktopWindow.isTransparentWindowSupported({
+        platform: "linux",
+        sessionType: "x11",
+        waylandDisplay: undefined,
+        currentDesktop: "cinnamon",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isTransparentWindowSupported({
+        platform: "linux",
+        sessionType: "x11",
+        waylandDisplay: undefined,
+        currentDesktop: undefined,
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isTransparentWindowSupported({
+        platform: "linux",
+        sessionType: "x11",
+        waylandDisplay: undefined,
+        currentDesktop: "i3",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isTransparentWindowSupported({
+        platform: "freebsd",
+        sessionType: undefined,
+        waylandDisplay: undefined,
+        currentDesktop: undefined,
+      }),
+    );
+  });
+
   it.effect("creates a transparent main window when glass opacity is below default", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
