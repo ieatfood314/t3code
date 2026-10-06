@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import * as Electron from "electron";
+import * as NodeChildProcess from "node:child_process";
 
 import {
   type DesktopSnapShotEvent,
@@ -181,47 +182,79 @@ export function shouldUseTransparentMainWindow(glassOpacity: number): boolean {
   return glassOpacity < DEFAULT_GLASS_OPACITY;
 }
 
-// Known-compositing X11 desktops. Wayland sessions composite by protocol, and
-// macOS/Windows always composite, so this list only guards the one setup that
-// can strand a transparent window on solid black: Linux X11 without compositing.
+// Desktops that always composite on X11, so a transparent window is safe
+// without further checks. Wayland sessions composite by protocol, and
+// macOS/Windows always composite. Anything else on X11 goes through the
+// compositor probe below: LXQt and XFCE can both run compositor-less, as can
+// minimal window managers, and a desktop name alone cannot prove compositing.
 const COMPOSITING_X11_DESKTOPS = [
   "kde",
   "plasma",
   "gnome",
   "cinnamon",
-  "xfce",
   "hyprland",
   "sway",
   "niri",
   "cosmic",
   "pantheon",
   "budgie",
-  "lxqt",
-  "mate",
-  "unity",
   "deepin",
+  "unity",
 ] as const;
 
-export function isTransparentWindowSupported(input: {
+export type TransparencySupport = "supported" | "unsupported" | "probe-required";
+
+export function resolveTransparencySupport(input: {
   readonly platform: NodeJS.Platform;
   readonly sessionType: string | undefined;
   readonly waylandDisplay: string | undefined;
   readonly currentDesktop: string | undefined;
-}): boolean {
+}): TransparencySupport {
   if (input.platform === "darwin" || input.platform === "win32") {
-    return true;
+    return "supported";
   }
   if (input.platform !== "linux") {
-    return false;
+    return "unsupported";
   }
   if (input.sessionType === "wayland") {
-    return true;
+    return "supported";
   }
   if (input.waylandDisplay !== undefined && input.waylandDisplay !== "") {
-    return true;
+    return "supported";
   }
   const desktop = (input.currentDesktop ?? "").toLowerCase();
-  return COMPOSITING_X11_DESKTOPS.some((known) => desktop.includes(known));
+  if (COMPOSITING_X11_DESKTOPS.some((known) => desktop.includes(known))) {
+    return "supported";
+  }
+  return "probe-required";
+}
+
+export function parseXDisplayScreen(display: string | undefined): number {
+  const match = /:(\d+)(?:\.(\d+))?$/.exec(display ?? "");
+  if (match === null) {
+    return 0;
+  }
+  const parsed = Number.parseInt(match[2] ?? "0", 10);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+export function hasActiveCompositorOwner(xpropOutput: string | null): boolean {
+  if (xpropOutput === null) {
+    return false;
+  }
+  return /=\s*[1-9]\d*/.test(xpropOutput);
+}
+
+export function probeX11Compositor(input: {
+  readonly display: string | undefined;
+  readonly runXprop: (args: readonly string[]) => string | null;
+}): boolean {
+  const screen = parseXDisplayScreen(input.display);
+  try {
+    return hasActiveCompositorOwner(input.runXprop(["-root", `_NET_WM_CM_S${screen}`]));
+  } catch {
+    return false;
+  }
 }
 
 type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
@@ -415,22 +448,49 @@ export const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(context);
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
 
+  // Runs once at startup at most, only for the ambiguous compositor case, so
+  // a blocking call is fine. Anything unexpected (no xprop, no X server, a
+  // failing query) resolves to no compositor, which keeps the window opaque.
+  const runXprop = (args: readonly string[]): string | null => {
+    try {
+      return NodeChildProcess.execFileSync("xprop", [...args], {
+        encoding: "utf8",
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      return null;
+    }
+  };
+
   // Transparency is fixed when the window is created, so this reads the
   // persisted preference instead of live settings. An unreadable or missing
   // file falls back to the opaque default look, as does a platform without
   // compositing (a transparent frame would strand the window on black there).
+  // The xprop probe only runs for the ambiguous case (Linux X11 outside the
+  // known-compositing desktops) and only when the slider already asks for
+  // transparency.
   const readTransparentMainWindow = clientSettings.get.pipe(
-    Effect.map((persisted) => {
-      const glassOpacity = Option.getOrElse(persisted, () => DEFAULT_CLIENT_SETTINGS).glassOpacity;
-      return (
-        shouldUseTransparentMainWindow(glassOpacity) &&
-        isTransparentWindowSupported({
-          platform: environment.platform,
-          sessionType: process.env.XDG_SESSION_TYPE,
-          waylandDisplay: process.env.WAYLAND_DISPLAY,
-          currentDesktop: process.env.XDG_CURRENT_DESKTOP,
-        })
-      );
+    Effect.map(
+      (persisted) => Option.getOrElse(persisted, () => DEFAULT_CLIENT_SETTINGS).glassOpacity,
+    ),
+    Effect.flatMap((glassOpacity) => {
+      if (!shouldUseTransparentMainWindow(glassOpacity)) {
+        return Effect.succeed(false);
+      }
+      const verdict = resolveTransparencySupport({
+        platform: environment.platform,
+        sessionType: process.env.XDG_SESSION_TYPE,
+        waylandDisplay: process.env.WAYLAND_DISPLAY,
+        currentDesktop: process.env.XDG_CURRENT_DESKTOP,
+      });
+      if (verdict === "supported") {
+        return Effect.succeed(true);
+      }
+      if (verdict === "unsupported") {
+        return Effect.succeed(false);
+      }
+      return Effect.sync(() => probeX11Compositor({ display: process.env.DISPLAY, runXprop }));
     }),
     Effect.catch((error) =>
       logWindowWarning("failed to read client settings; using opaque main window", {

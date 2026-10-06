@@ -632,60 +632,119 @@ describe("DesktopWindow", () => {
   });
 
   it("only allows transparent windows where compositing is guaranteed", () => {
-    assert.isTrue(
-      DesktopWindow.isTransparentWindowSupported({
+    assert.equal(
+      DesktopWindow.resolveTransparencySupport({
         platform: "darwin",
         sessionType: undefined,
         waylandDisplay: undefined,
         currentDesktop: undefined,
       }),
+      "supported",
     );
-    assert.isTrue(
-      DesktopWindow.isTransparentWindowSupported({
+    assert.equal(
+      DesktopWindow.resolveTransparencySupport({
         platform: "win32",
         sessionType: undefined,
         waylandDisplay: undefined,
         currentDesktop: undefined,
       }),
+      "supported",
     );
-    assert.isTrue(
-      DesktopWindow.isTransparentWindowSupported({
+    assert.equal(
+      DesktopWindow.resolveTransparencySupport({
         platform: "linux",
         sessionType: "wayland",
         waylandDisplay: "wayland-0",
         currentDesktop: "KDE",
       }),
+      "supported",
     );
-    assert.isTrue(
-      DesktopWindow.isTransparentWindowSupported({
+    assert.equal(
+      DesktopWindow.resolveTransparencySupport({
         platform: "linux",
         sessionType: "x11",
         waylandDisplay: undefined,
         currentDesktop: "cinnamon",
       }),
+      "supported",
     );
-    assert.isFalse(
-      DesktopWindow.isTransparentWindowSupported({
+    assert.equal(
+      DesktopWindow.resolveTransparencySupport({
         platform: "linux",
         sessionType: "x11",
         waylandDisplay: undefined,
         currentDesktop: undefined,
       }),
+      "probe-required",
     );
-    assert.isFalse(
-      DesktopWindow.isTransparentWindowSupported({
+    assert.equal(
+      DesktopWindow.resolveTransparencySupport({
+        platform: "linux",
+        sessionType: "x11",
+        waylandDisplay: undefined,
+        currentDesktop: "LXQt",
+      }),
+      "probe-required",
+    );
+    assert.equal(
+      DesktopWindow.resolveTransparencySupport({
         platform: "linux",
         sessionType: "x11",
         waylandDisplay: undefined,
         currentDesktop: "i3",
       }),
+      "probe-required",
     );
-    assert.isFalse(
-      DesktopWindow.isTransparentWindowSupported({
+    assert.equal(
+      DesktopWindow.resolveTransparencySupport({
         platform: "freebsd",
         sessionType: undefined,
         waylandDisplay: undefined,
         currentDesktop: undefined,
+      }),
+      "unsupported",
+    );
+  });
+
+  it("probes the X11 compositor selection for ambiguous sessions", () => {
+    const seen: string[][] = [];
+    assert.isTrue(
+      DesktopWindow.probeX11Compositor({
+        display: ":0",
+        runXprop: (args) => {
+          seen.push([...args]);
+          return "_NET_WM_CM_S0(CARDINAL) = 12345678";
+        },
+      }),
+    );
+    assert.deepEqual(seen, [["-root", "_NET_WM_CM_S0"]]);
+    assert.isTrue(
+      DesktopWindow.probeX11Compositor({
+        display: ":0.1",
+        runXprop: (args) => {
+          assert.deepEqual([...args], ["-root", "_NET_WM_CM_S1"]);
+          return "_NET_WM_CM_S1(CARDINAL) = 42";
+        },
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.probeX11Compositor({
+        display: ":0",
+        runXprop: () => "_NET_WM_CM_S0:  not found.",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.probeX11Compositor({
+        display: undefined,
+        runXprop: () => null,
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.probeX11Compositor({
+        display: ":0",
+        runXprop: () => {
+          throw new Error("no xprop");
+        },
       }),
     );
   });
