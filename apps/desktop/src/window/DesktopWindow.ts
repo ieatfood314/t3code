@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Spawns xprop once at startup to detect the X11 compositor.
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -8,6 +9,7 @@ import * as Ref from "effect/Ref";
 
 import * as Electron from "electron";
 import * as NodeChildProcess from "node:child_process";
+import * as NodeUtil from "node:util";
 
 import {
   type DesktopSnapShotEvent,
@@ -245,18 +247,6 @@ export function hasActiveCompositorOwner(xpropOutput: string | null): boolean {
   return /=\s*[1-9]\d*/.test(xpropOutput);
 }
 
-export function probeX11Compositor(input: {
-  readonly display: string | undefined;
-  readonly runXprop: (args: readonly string[]) => string | null;
-}): boolean {
-  const screen = parseXDisplayScreen(input.display);
-  try {
-    return hasActiveCompositorOwner(input.runXprop(["-root", `_NET_WM_CM_S${screen}`]));
-  } catch {
-    return false;
-  }
-}
-
 type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
 
 function windowFitsWithinDisplay(
@@ -448,20 +438,19 @@ export const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(context);
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
 
-  // Runs once at startup at most, only for the ambiguous compositor case, so
-  // a blocking call is fine. Anything unexpected (no xprop, no X server, a
-  // failing query) resolves to no compositor, which keeps the window opaque.
-  const runXprop = (args: readonly string[]): string | null => {
-    try {
-      return NodeChildProcess.execFileSync("xprop", [...args], {
+  // Runs once at startup at most, only for the ambiguous compositor case.
+  // Anything unexpected (no xprop, no X server, a failing query) resolves to
+  // no compositor, which keeps the window opaque.
+  const runXprop = (args: readonly string[]): Effect.Effect<string | null, never> =>
+    Effect.promise(() =>
+      NodeUtil.promisify(NodeChildProcess.execFile)("xprop", [...args], {
         encoding: "utf8",
-        timeout: 5000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-    } catch {
-      return null;
-    }
-  };
+        timeout: 5_000,
+      }).then(
+        ({ stdout }) => stdout as string | null,
+        () => null as string | null,
+      ),
+    );
 
   // Transparency is fixed when the window is created, so this reads the
   // persisted preference instead of live settings. An unreadable or missing
@@ -490,7 +479,13 @@ export const make = Effect.gen(function* () {
       if (verdict === "unsupported") {
         return Effect.succeed(false);
       }
-      return Effect.sync(() => probeX11Compositor({ display: process.env.DISPLAY, runXprop }));
+      if (verdict === "probe-required") {
+        const screen = parseXDisplayScreen(process.env.DISPLAY);
+        return runXprop(["-root", `_NET_WM_CM_S${screen}`]).pipe(
+          Effect.map((output) => hasActiveCompositorOwner(output)),
+        );
+      }
+      return Effect.succeed(false);
     }),
     Effect.catch((error) =>
       logWindowWarning("failed to read client settings; using opaque main window", {

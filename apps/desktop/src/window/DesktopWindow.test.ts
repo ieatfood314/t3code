@@ -319,6 +319,7 @@ function layerTest(input: {
             : Effect.succeed(input.clientSettings ?? Option.none()),
         }),
         layerDesktopServerExposure,
+        DesktopState.layer,
         layerElectronApp,
         Layer.succeed(ElectronMenu.ElectronMenu, {
           setApplicationMenu: () => Effect.void,
@@ -706,47 +707,20 @@ describe("DesktopWindow", () => {
     );
   });
 
-  it("probes the X11 compositor selection for ambiguous sessions", () => {
-    const seen: string[][] = [];
-    assert.isTrue(
-      DesktopWindow.probeX11Compositor({
-        display: ":0",
-        runXprop: (args) => {
-          seen.push([...args]);
-          return "_NET_WM_CM_S0(CARDINAL) = 12345678";
-        },
-      }),
-    );
-    assert.deepEqual(seen, [["-root", "_NET_WM_CM_S0"]]);
-    assert.isTrue(
-      DesktopWindow.probeX11Compositor({
-        display: ":0.1",
-        runXprop: (args) => {
-          assert.deepEqual([...args], ["-root", "_NET_WM_CM_S1"]);
-          return "_NET_WM_CM_S1(CARDINAL) = 42";
-        },
-      }),
-    );
-    assert.isFalse(
-      DesktopWindow.probeX11Compositor({
-        display: ":0",
-        runXprop: () => "_NET_WM_CM_S0:  not found.",
-      }),
-    );
-    assert.isFalse(
-      DesktopWindow.probeX11Compositor({
-        display: undefined,
-        runXprop: () => null,
-      }),
-    );
-    assert.isFalse(
-      DesktopWindow.probeX11Compositor({
-        display: ":0",
-        runXprop: () => {
-          throw new Error("no xprop");
-        },
-      }),
-    );
+  it("parses X display screen numbers for the compositor probe", () => {
+    assert.equal(DesktopWindow.parseXDisplayScreen(undefined), 0);
+    assert.equal(DesktopWindow.parseXDisplayScreen(":0"), 0);
+    assert.equal(DesktopWindow.parseXDisplayScreen(":0.1"), 1);
+    assert.equal(DesktopWindow.parseXDisplayScreen(":10"), 0);
+    assert.equal(DesktopWindow.parseXDisplayScreen("hostname:2.0"), 0);
+    assert.equal(DesktopWindow.parseXDisplayScreen("garbage"), 0);
+  });
+
+  it("recognizes an owned compositor selection", () => {
+    assert.isTrue(DesktopWindow.hasActiveCompositorOwner("_NET_WM_CM_S0(CARDINAL) = 12345678"));
+    assert.isFalse(DesktopWindow.hasActiveCompositorOwner("_NET_WM_CM_S0:  not found."));
+    assert.isFalse(DesktopWindow.hasActiveCompositorOwner(null));
+    assert.isFalse(DesktopWindow.hasActiveCompositorOwner(""));
   });
 
   it.effect("creates a transparent main window when glass opacity is below default", () =>
@@ -755,7 +729,7 @@ describe("DesktopWindow", () => {
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
       const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
-      const layer = makeTestLayer({
+      const layer = layerTest({
         window: fakeWindow.window,
         createCount,
         mainWindow,
@@ -782,7 +756,7 @@ describe("DesktopWindow", () => {
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
       const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
-      const layer = makeTestLayer({
+      const layer = layerTest({
         window: fakeWindow.window,
         createCount,
         mainWindow,
@@ -814,7 +788,7 @@ describe("DesktopWindow", () => {
         const clientSettingsRef = yield* Ref.make(
           Option.some({ ...DEFAULT_CLIENT_SETTINGS, glassOpacity: 40 }),
         );
-        const layer = makeTestLayer({
+        const layer = layerTest({
           window: fakeWindow.window,
           createCount,
           mainWindow,
@@ -848,7 +822,7 @@ describe("DesktopWindow", () => {
       const clientSettingsRef = yield* Ref.make(
         Option.some({ ...DEFAULT_CLIENT_SETTINGS, glassOpacity: 100 }),
       );
-      const layer = makeTestLayer({
+      const layer = layerTest({
         window: fakeWindow.window,
         createCount,
         mainWindow,
