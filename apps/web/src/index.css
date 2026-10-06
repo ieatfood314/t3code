@@ -708,11 +708,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 /* Desktop only: the main window is created transparent when Glass opacity
-   drops below its default (see GlassAppearanceSync), so the page background
-   follows the same mix instead of covering the transparency. Text and controls
-   keep their own colors, which is what keeps the see-through readable. */
-html[data-desktop-translucent-window="true"],
-html[data-desktop-translucent-window="true"] body {
+   drops below its default (see GlassAppearanceSync). The mix lives on the
+   document element alone: painting it on both html and body would stack two
+   translucent layers past the selected opacity, so body and the shell
+   canvases below go fully transparent instead. Text and controls keep their
+   own colors, which is what keeps the see-through readable. */
+html[data-desktop-translucent-window="true"] {
   /* !important: the shell and injected third-party stylesheets also paint
      html/body (e.g. theme hooks), and injected <style> tags sort after the
      bundle, so only importance keeps this winning regardless of order. */
@@ -722,23 +723,12 @@ html[data-desktop-translucent-window="true"] body {
     transparent
   ) !important;
 }
-
-/* The app shell paints its own canvases over the page (sidebar surface,
-   main column, and their direct canvas children), so those join the same mix
-   or the window keeps looking solid. This stays scoped to the shell: nested
-   components using bg-background/bg-sidebar elsewhere (cards, inputs,
-   dialogs) keep their colors, which is what keeps text readable. */
+html[data-desktop-translucent-window="true"] body,
 html[data-desktop-translucent-window="true"] [data-slot="sidebar"],
-html[data-desktop-translucent-window="true"] [data-slot="sidebar-inner"] {
-  background-color: color-mix(in srgb, var(--sidebar) var(--glass-opacity), transparent) !important;
-}
+html[data-desktop-translucent-window="true"] [data-slot="sidebar-inner"],
 html[data-desktop-translucent-window="true"] main[data-slot="sidebar-inset"],
 html[data-desktop-translucent-window="true"] main[data-slot="sidebar-inset"] > .bg-background {
-  background-color: color-mix(
-    in srgb,
-    var(--background) var(--glass-opacity),
-    transparent
-  ) !important;
+  background-color: transparent !important;
 }
 
 @layer components {
