@@ -723,11 +723,24 @@ html[data-desktop-translucent-window="true"] {
     transparent
   ) !important;
 }
+/* The chat column nests its canvas below the workspace root (header, canvas,
+   messages wrapper), so those shell layers join the transparency too. Content
+   surfaces deeper down (composer, bubbles, cards, popovers) keep their colors,
+   which is what keeps the see-through readable. */
 html[data-desktop-translucent-window="true"] body,
 html[data-desktop-translucent-window="true"] [data-slot="sidebar"],
 html[data-desktop-translucent-window="true"] [data-slot="sidebar-inner"],
 html[data-desktop-translucent-window="true"] main[data-slot="sidebar-inset"],
-html[data-desktop-translucent-window="true"] main[data-slot="sidebar-inset"] > .bg-background {
+html[data-desktop-translucent-window="true"] main[data-slot="sidebar-inset"] > .bg-background,
+html[data-desktop-translucent-window="true"] main[data-slot="sidebar-inset"] [data-chat-header],
+html[data-desktop-translucent-window="true"] main[data-slot="sidebar-inset"] [data-chat-canvas],
+html[data-desktop-translucent-window="true"]
+  main[data-slot="sidebar-inset"]
+  [data-chat-canvas]
+  > .bg-background,
+html[data-desktop-translucent-window="true"]
+  main[data-slot="sidebar-inset"]
+  [data-timeline-loading] {
   background-color: transparent !important;
 }
 
